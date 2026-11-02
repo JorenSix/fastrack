@@ -14,7 +14,7 @@
 
 #define FTP_SERVICE_NAME   "be.jsix.fasttrackd"
 #define FTP_SHM_MAGIC      0x46545031u /* 'FTP1' */
-#define FTP_SHM_VERSION    1
+#define FTP_SHM_VERSION    2
 #define FTP_RING_FRAMES    16384u
 #define FTP_SHM_OUT_CH     4
 #define FTP_SHM_IN_CH      2
@@ -43,6 +43,10 @@ typedef struct {
 
     _Atomic uint64_t in_newest;         // input written up to (exclusive), device sample time
     _Atomic uint64_t out_consumed;      // output read by the daemon up to (exclusive)
+    _Atomic uint64_t out_written_end;   // plug-in wrote output up to (exclusive)
+    _Atomic uint32_t in_underruns;      // plug-in input reads that hit unwritten frames
+    _Atomic uint32_t safety_out_us;     // HAL safety offsets requested by the daemon
+    _Atomic uint32_t safety_in_us;
 
     uint8_t  _pad2[64];
     uint8_t  out_ring[FTP_RING_FRAMES * FTP_SHM_OUT_CH * FTP_SHM_BPS];

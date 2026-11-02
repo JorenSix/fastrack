@@ -226,8 +226,16 @@ static UInt32 out_queue_frames(void)
     return q ? q : (UInt32)(g_rate * 0.016);
 }
 
-static UInt32 safety_out(void) { return (UInt32)(g_rate * 0.003); }   // DLL jitter margin
-static UInt32 safety_in(void)  { return (UInt32)(g_rate * 0.006); }   // 2 ms transfers + jitter
+// Headroom between the HAL and the USB engine; set by fasttrackd (FTP_SAFETY_OUT_MS / FTP_SAFETY_IN_MS).
+static UInt32 safety_frames(bool output)
+{
+    ftp_shm *s = atomic_load(&g_shm);
+    uint32_t us = s ? atomic_load(output ? &s->safety_out_us : &s->safety_in_us) : 0;
+    if (!us) us = 8000;
+    return (UInt32)(g_rate * us / 1e6);
+}
+static UInt32 safety_out(void) { return safety_frames(true); }
+static UInt32 safety_in(void)  { return safety_frames(false); }
 
 static void fill_physical(AudioStreamBasicDescription *f, UInt32 ch, Float64 rate)
 {
@@ -831,6 +839,8 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID dev, A
             memcpy(s->out_ring + (size_t)idx * stride, src + (size_t)done * stride, (size_t)n * stride);
             done += n;
         }
+        uint64_t end = pos + frames, prev = atomic_load_explicit(&s->out_written_end, memory_order_relaxed);
+        if (end > prev || prev - end > FTP_RING_FRAMES) atomic_store_explicit(&s->out_written_end, end, memory_order_release);
         return 0;
     }
     case kAudioServerPlugInIOOperationReadInput: {
@@ -839,6 +849,7 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID dev, A
         if (!s) { memset(dst, 0, (size_t)frames * stride); return 0; }
         int64_t pos = (int64_t)ci->mInputTime.mSampleTime;
         int64_t newest = (int64_t)atomic_load_explicit(&s->in_newest, memory_order_acquire);
+        if (pos + (int64_t)frames > newest) atomic_fetch_add_explicit(&s->in_underruns, 1, memory_order_relaxed);
         for (uint32_t done = 0; done < frames;) {
             int64_t p = pos + done;
             uint32_t idx = (uint32_t)((uint64_t)p & mask), n = frames - done;

@@ -11,6 +11,7 @@
 #include <IOKit/usb/IOUSBLib.h>
 #include <dispatch/dispatch.h>
 #include <mach/mach_time.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,6 +33,12 @@ static uint32_t           g_rate = 48000;
 static int                g_input = FTP_IF_IN_ANALOG;
 static bool               g_want_running;
 static bool               g_verbose;
+
+// USB-thread-only diagnostics, reported every few seconds
+static uint64_t           g_out_underruns, g_out_missing_frames;
+static int64_t            g_margin_min = INT64_MAX;
+static double             g_jitter_max_ms;
+static double             g_ms_per_tick;
 
 // USB-thread-only state for input alignment
 static int64_t            g_in_offset;
@@ -58,6 +65,12 @@ static void on_render(void *ctx, uint64_t pos, float *buf, uint32_t frames)
 {
     ftp_shm *s = g_shm;
     const uint32_t mask = FTP_RING_FRAMES - 1, stride = FTP_SHM_OUT_CH * FTP_SHM_BPS;
+    uint64_t written = atomic_load_explicit(&s->out_written_end, memory_order_acquire);
+    if (written) { // plug-in has written at least once this run
+        int64_t margin = (int64_t)written - (int64_t)(pos + frames);
+        if (margin < g_margin_min) g_margin_min = margin;
+        if (margin < 0) { g_out_underruns++; g_out_missing_frames += (uint64_t)(margin < -(int64_t)frames ? frames : -margin); }
+    }
     uint32_t done = 0;
     while (done < frames) {
         uint32_t idx = (uint32_t)((pos + done) & mask);
@@ -101,6 +114,20 @@ static void on_capture(void *ctx, uint64_t pos, const float *buf, uint32_t frame
 static void on_clock(void *ctx, uint64_t sample, uint64_t host, double tps)
 {
     ftp_shm_write_clock(g_shm, sample, host, tps);
+    double j = fabs((double)mach_absolute_time() - (double)host) * g_ms_per_tick;
+    if (j > g_jitter_max_ms) g_jitter_max_ms = j;
+}
+
+static void report_stats(void)
+{
+    if (!atomic_load(&g_shm->running)) return;
+    LOGF("stats: out underruns %llu (%llu frames), min out margin %.2f ms, in underruns %u, xruns %u, clock jitter max %.2f ms",
+         (unsigned long long)g_out_underruns, (unsigned long long)g_out_missing_frames,
+         g_margin_min == INT64_MAX ? 0.0 : g_margin_min * 1000.0 / atomic_load(&g_shm->rate),
+         atomic_exchange(&g_shm->in_underruns, 0), atomic_exchange(&g_shm->xruns, 0), g_jitter_max_ms);
+    g_out_underruns = g_out_missing_frames = 0;
+    g_margin_min = INT64_MAX;
+    g_jitter_max_ms = 0;
 }
 
 static void broadcast(xpc_object_t peers, xpc_object_t msg)
@@ -159,6 +186,7 @@ static int stream_start(void)
     memset(s->in_ring, 0, sizeof s->in_ring);
     atomic_store(&s->in_newest, 0);
     atomic_store(&s->out_consumed, 0);
+    atomic_store(&s->out_written_end, 0);
     g_in_aligned = false;
     g_last_out_pos = 0;
     atomic_store(&s->rate, g_rate);
@@ -344,7 +372,11 @@ int main(int argc, char **argv)
     g_shm->magic = FTP_SHM_MAGIC;
     g_shm->version = FTP_SHM_VERSION;
     g_shm->ring_frames = FTP_RING_FRAMES;
+    const char *e;
+    g_shm->safety_out_us = (e = getenv("FTP_SAFETY_OUT_MS")) ? (uint32_t)(atof(e) * 1000) : 8000;
+    g_shm->safety_in_us = (e = getenv("FTP_SAFETY_IN_MS")) ? (uint32_t)(atof(e) * 1000) : 10000;
     g_shm_obj = xpc_shmem_create(g_shm, g_shm_size);
+    LOGF("safety offsets: output %.1f ms, input %.1f ms", g_shm->safety_out_us / 1000.0, g_shm->safety_in_us / 1000.0);
 
     xpc_connection_t listener = xpc_connection_create_mach_service(FTP_SERVICE_NAME, g_q, XPC_CONNECTION_MACH_SERVICE_LISTENER);
     xpc_connection_set_event_handler(listener, ^(xpc_object_t ev) {
@@ -360,6 +392,14 @@ int main(int argc, char **argv)
     dispatch_source_t si = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGINT, 0, g_q);
     dispatch_source_set_event_handler(si, ^{ shutdown_and_exit(); });
     dispatch_resume(si);
+
+    mach_timebase_info_data_t tb;
+    mach_timebase_info(&tb);
+    g_ms_per_tick = (double)tb.numer / tb.denom / 1e6;
+    dispatch_source_t stats = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, g_q);
+    dispatch_source_set_timer(stats, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC, NSEC_PER_SEC / 10);
+    dispatch_source_set_event_handler(stats, ^{ report_stats(); });
+    dispatch_resume(stats);
 
     dispatch_async(g_q, ^{ watch_usb(); });
     LOGF("started (service %s)", FTP_SERVICE_NAME);

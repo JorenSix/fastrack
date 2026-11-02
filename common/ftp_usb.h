@@ -1,4 +1,5 @@
-// User-space USB engine for the M-Audio FastTrack Pro (0763:2012).
+// User-space USB engine for the M-Audio FastTrack Pro (0763:2012),
+// implemented on IOUSBHost.framework (common/ftp_usb.m).
 //
 // Mirrors what Linux snd-usb-audio does for this device:
 //   * switch to USB configuration 2 (snd_usb_fasttrackpro_boot_quirk)
@@ -60,8 +61,8 @@ typedef struct {
 typedef struct {
     uint32_t rate;          // 44100, 48000, 88200, 96000
     int      input_iface;   // FTP_IF_IN_ANALOG or FTP_IF_IN_DIGITAL
-    int      xfers;         // transfers in flight per endpoint (default 8)
-    int      pkts;          // 1 ms packets per transfer (default 2)
+    int      xfers;         // transfers in flight per endpoint (default 4)
+    int      pkts;          // 1 ms packets per transfer (default 4)
     bool     little_endian; // debug: 24-bit LE instead of the Linux-documented BE
     bool     no_out34;      // debug: only stream outputs 1/2
     bool     no_input;      // debug: don't stream the input
@@ -80,7 +81,8 @@ typedef struct {
 } ftp_stats;
 
 // Find, capture (detach AppleUSBAudio - requires root), switch to config 2,
-// claim interfaces and start the event thread + MIDI input.
+// open the interfaces and start MIDI input. Returns 0 or a negative error:
+// -3 access denied, -4 no device, -5 not found, -6 busy; else an IOReturn.
 int  ftp_open(ftp_dev **out, const ftp_callbacks *cb, int verbose);
 bool ftp_rate_supported(uint32_t rate);
 int  ftp_start(ftp_dev *d, const ftp_stream_config *cfg);

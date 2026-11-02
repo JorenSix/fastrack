@@ -54,7 +54,7 @@ Setup sliders work.
  coreaudiod ── FastTrackPro.driver   (AudioServerPlugIn, sandboxed, no USB access)
       │   XPC "be.jsix.fasttrackd" for control + shared-memory ring buffers for audio
  fasttrackd  (root LaunchDaemon)
-      │   libusb: capture the device from AppleUSBAudio, SET_CONFIGURATION 2,
+      │   IOUSBHost.framework: capture the device from AppleUSBAudio, SET_CONFIGURATION 2,
       │   alt settings, sample rate, isochronous audio, bulk USB-MIDI
  FastTrack Pro ──────────── MIDI ──────────► fasttrack-midi (LaunchAgent) ─► CoreMIDI
 ```
@@ -76,7 +76,7 @@ Timing:
 
 | Path | What |
 |---|---|
-| `common/ftp_usb.c` | libusb engine: capture, config 2, isochronous IN/OUT, MIDI, clock DLL feed |
+| `common/ftp_usb.m` | IOUSBHost engine: capture, config 2, isochronous IN/OUT with kernel-mapped buffers and hardware timestamps, MIDI |
 | `common/ftp_format.c` | S24_3BE ↔ float, adaptive packet scheduler |
 | `common/ftp_clock.c` | DLL time filter |
 | `common/ftp_shm.h`, `ftp_proto.h` | Shared-memory layout and XPC protocol |
@@ -88,7 +88,8 @@ Timing:
 
 ## Build & use
 
-Requirements: macOS 15, Xcode Command Line Tools, `brew install libusb`.
+Requirements: macOS 15, Xcode Command Line Tools. `brew install libusb` is only needed for
+`ftp-probe --dump`.
 
 ```sh
 make            # builds everything
@@ -111,7 +112,9 @@ log stream --predicate 'subsystem == "be.jsix.fasttrack"'
 - [x] Protocol checked on real hardware with `ftp-probe`: config 2, 24-bit
       big-endian, clean tones on outputs 1–4 at 48 kHz, input capture, clock at
       48000 Hz with no xruns
-- [ ] Daemon + HAL plug-in tested end-to-end (written, not yet tested)
+- [x] Daemon + HAL plug-in end-to-end: playback at 48 kHz, 0 underruns, software volume/mute
+- [x] Engine moved from libusb to IOUSBHost.framework: CPU ~20% → ~9%, clock jitter 8 ms → <1 ms
+- [ ] Recording through Core Audio tested
 - [ ] 88.2/96 kHz checked on hardware
 - [ ] MIDI tested
 - [ ] Long-run drift and dropout test
@@ -120,8 +123,13 @@ log stream --predicate 'subsystem == "be.jsix.fasttrack"'
 
 - At 88.2/96 kHz only outputs 1/2 work (USB bandwidth).
 - Volume and mute are in software; the front-panel gain knobs stay analog.
-- Output latency is about 17 ms (8 × 2 ms USB transfer queue). It can be tuned
-  with the `FTP_XFERS` / `FTP_PKTS` environment variables of `fasttrackd`.
+- Output latency is about 17 ms (4 × 4 ms USB transfer queue). It can be tuned
+  with the `FTP_XFERS` / `FTP_PKTS` environment variables of `fasttrackd`. The HAL
+  safety offsets default to 8 ms out / 10 ms in (`FTP_SAFETY_OUT_MS` / `FTP_SAFETY_IN_MS`).
+- The daemon still uses about 9% of one core while streaming, mostly kernel time
+  for isochronous transfers.
+- When a stream starts, a few packets can be rejected as "too new" (about 3 ms of
+  audio lost once).
 - DTS/AC3 pass-through (interface 3, alt 7) is not supported.
 - The daemon accepts XPC connections from any local process.
 

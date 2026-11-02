@@ -126,6 +126,15 @@ typedef struct {
 } probe;
 
 static atomic_bool g_quit;
+static double g_amp = 0.25;   // --amp
+static bool   g_ramp;         // --ramp: 0.1, 0.2 ... 1.0 full scale, one step per second
+
+static double amp_at(double t)
+{
+    if (!g_ramp) return g_amp;
+    double a = 0.1 * (1.0 + floor(t));
+    return a > 1.0 ? 1.0 : a;
+}
 static void on_sig(int s) { (void)s; atomic_store(&g_quit, true); }
 
 static void render(void *ctx, uint64_t pos, float *buf, uint32_t frames)
@@ -135,7 +144,7 @@ static void render(void *ctx, uint64_t pos, float *buf, uint32_t frames)
     for (uint32_t i = 0; i < frames; i++) {
         double t = (double)(pos + i) / p->rate;
         for (int c = 0; c < 4; c++)
-            buf[i * 4 + c] = (p->channel_mask & (1u << c)) ? (float)(0.25 * sin(2 * M_PI * freq[c] * t)) : 0.0f;
+            buf[i * 4 + c] = (p->channel_mask & (1u << c)) ? (float)(amp_at(t) * sin(2 * M_PI * freq[c] * t)) : 0.0f;
     }
 }
 
@@ -220,6 +229,8 @@ static int tone(uint32_t rate, double seconds, const char *wav_path, int digital
         double measured = 0;
         if (first_host && p.clock_host > first_host)
             measured = (double)(p.clock_sample - first_sample) / ((double)(p.clock_host - first_host) / (tps_nominal * rate));
+        if (g_ramp || g_amp != 0.25)
+            printf("out amplitude %.2f (%.1f dBFS)\n", amp_at((double)p.clock_sample / rate), 20 * log10(amp_at((double)p.clock_sample / rate)));
         printf("in peak L %.3f R %.3f | captured %llu frames | clock %.2f Hz (dll %.2f Hz) | xruns %llu\n",
                p.peak[0], p.peak[1], (unsigned long long)p.wav_frames, measured,
                p.tps > 0 ? tps_nominal * rate / p.tps : 0.0, (unsigned long long)atomic_load(&p.xruns));
@@ -257,13 +268,15 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--le")) le = true;
         else if (!strcmp(argv[i], "--no-out34")) no34 = true;
         else if (!strcmp(argv[i], "--no-input")) noin = true;
+        else if (!strcmp(argv[i], "--ramp")) g_ramp = true;
+        else if (!strcmp(argv[i], "--amp") && i + 1 < argc) g_amp = atof(argv[++i]);
         else if (!strcmp(argv[i], "--channels") && i + 1 < argc) {
             mask = 0;
             for (const char *c = argv[++i]; *c; c++) if (*c >= '1' && *c <= '4') mask |= 1u << (*c - '1');
         } else { rate = 0; break; }
     }
     if (!rate || !ftp_rate_supported(rate)) {
-        fprintf(stderr, "usage: %s --dump\n       sudo %s --tone 44100|48000|88200|96000 [-s secs] [--record in.wav] [--digital] [--le] [--no-out34] [--no-input] [--channels 1234]\n", argv[0], argv[0]);
+        fprintf(stderr, "usage: %s --dump\n       sudo %s --tone 44100|48000|88200|96000 [-s secs] [--record in.wav] [--digital] [--le] [--no-out34] [--no-input] [--channels 1234] [--amp 0..1] [--ramp]\n", argv[0], argv[0]);
         return 2;
     }
     return tone(rate, seconds, wav, digital, mask, le, no34, noin);

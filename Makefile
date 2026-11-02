@@ -6,7 +6,8 @@ USBLIBS  = $(LIBUSB)/lib/libusb-1.0.a -framework IOKit -framework CoreFoundation
 B        = build
 
 COMMON   = common/ftp_format.c common/ftp_clock.c
-ENGINE   = $(COMMON) common/ftp_usb.c
+ENGINE   = $(COMMON) common/ftp_usb.m
+ENGLIBS  = -fobjc-arc -framework Foundation -framework IOUSBHost -framework IOKit -framework CoreFoundation
 
 .PHONY: all test clean install uninstall
 DRIVER   = $(B)/FastTrackPro.driver
@@ -17,10 +18,10 @@ $(B):
 	mkdir -p $(B)
 
 $(B)/ftp-probe: tools/ftp-probe.c $(ENGINE) common/*.h | $(B)
-	$(CC) $(CFLAGS) -o $@ tools/ftp-probe.c $(ENGINE) $(USBLIBS)
+	$(CC) $(CFLAGS) -o $@ tools/ftp-probe.c $(ENGINE) $(USBLIBS) $(ENGLIBS)
 
 $(B)/fasttrackd: daemon/fasttrackd.c $(ENGINE) common/*.h | $(B)
-	$(CC) $(CFLAGS) -o $@ daemon/fasttrackd.c $(ENGINE) $(USBLIBS)
+	$(CC) $(CFLAGS) -o $@ daemon/fasttrackd.c $(ENGINE) $(ENGLIBS)
 
 $(B)/fasttrack-midi: midi-agent/fasttrack-midi.c common/*.h | $(B)
 	$(CC) $(CFLAGS) -Wno-deprecated-declarations -o $@ midi-agent/fasttrack-midi.c -framework CoreMIDI -framework CoreFoundation
