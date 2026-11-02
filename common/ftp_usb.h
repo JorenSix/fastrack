@@ -61,8 +61,8 @@ typedef struct {
 typedef struct {
     uint32_t rate;          // 44100, 48000, 88200, 96000
     int      input_iface;   // FTP_IF_IN_ANALOG or FTP_IF_IN_DIGITAL
-    int      xfers;         // transfers in flight per endpoint (default 4)
-    int      pkts;          // 1 ms packets per transfer (default 4)
+    int      xfers;         // transfers in flight per endpoint (default 2)
+    int      pkts;          // 1 ms packets per transfer (default 8)
     bool     little_endian; // debug: 24-bit LE instead of the Linux-documented BE
     bool     no_out34;      // debug: only stream outputs 1/2
     bool     no_input;      // debug: don't stream the input

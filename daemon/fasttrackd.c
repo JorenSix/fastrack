@@ -374,7 +374,7 @@ int main(int argc, char **argv)
     g_shm->ring_frames = FTP_RING_FRAMES;
     const char *e;
     g_shm->safety_out_us = (e = getenv("FTP_SAFETY_OUT_MS")) ? (uint32_t)(atof(e) * 1000) : 8000;
-    g_shm->safety_in_us = (e = getenv("FTP_SAFETY_IN_MS")) ? (uint32_t)(atof(e) * 1000) : 10000;
+    g_shm->safety_in_us = (e = getenv("FTP_SAFETY_IN_MS")) ? (uint32_t)(atof(e) * 1000) : 12000;
     g_shm_obj = xpc_shmem_create(g_shm, g_shm_size);
     LOGF("safety offsets: output %.1f ms, input %.1f ms", g_shm->safety_out_us / 1000.0, g_shm->safety_in_us / 1000.0);
 

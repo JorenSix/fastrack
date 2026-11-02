@@ -493,8 +493,8 @@ int ftp_start(ftp_dev *d, const ftp_stream_config *cfg)
 
     @autoreleasepool {
         e->cfg = *cfg;
-        if (e->cfg.xfers <= 1 || e->cfg.xfers > MAX_XFERS) e->cfg.xfers = 4;
-        if (e->cfg.pkts <= 0 || e->cfg.pkts > MAX_PKTS) e->cfg.pkts = 4;
+        if (e->cfg.xfers <= 1 || e->cfg.xfers > MAX_XFERS) e->cfg.xfers = 2;
+        if (e->cfg.pkts <= 0 || e->cfg.pkts > MAX_PKTS) e->cfg.pkts = 8;
         if (e->cfg.input_iface != FTP_IF_IN_DIGITAL || !e->ifInD) e->cfg.input_iface = FTP_IF_IN_ANALOG;
         const char *env;
         if ((env = getenv("FTP_XFERS")) && atoi(env) > 1 && atoi(env) <= MAX_XFERS) e->cfg.xfers = atoi(env);

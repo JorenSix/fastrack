@@ -113,7 +113,7 @@ log stream --predicate 'subsystem == "be.jsix.fasttrack"'
       big-endian, clean tones on outputs 1–4 at 48 kHz, input capture, clock at
       48000 Hz with no xruns
 - [x] Daemon + HAL plug-in end-to-end: playback at 48 kHz, 0 underruns, software volume/mute
-- [x] Engine moved from libusb to IOUSBHost.framework: CPU ~20% → ~9%, clock jitter 8 ms → <1 ms
+- [x] Engine moved from libusb to IOUSBHost.framework, 2 × 8 ms transfers: CPU ~20% → ~5.6%, clock jitter 8 ms → <1 ms
 - [ ] Recording through Core Audio tested
 - [ ] 88.2/96 kHz checked on hardware
 - [ ] MIDI tested
@@ -123,11 +123,11 @@ log stream --predicate 'subsystem == "be.jsix.fasttrack"'
 
 - At 88.2/96 kHz only outputs 1/2 work (USB bandwidth).
 - Volume and mute are in software; the front-panel gain knobs stay analog.
-- Output latency is about 17 ms (4 × 4 ms USB transfer queue). It can be tuned
+- Output latency is about 17 ms (2 × 8 ms USB transfer queue). It can be tuned
   with the `FTP_XFERS` / `FTP_PKTS` environment variables of `fasttrackd`. The HAL
-  safety offsets default to 8 ms out / 10 ms in (`FTP_SAFETY_OUT_MS` / `FTP_SAFETY_IN_MS`).
-- The daemon still uses about 9% of one core while streaming, mostly kernel time
-  for isochronous transfers.
+  safety offsets default to 8 ms out / 12 ms in (`FTP_SAFETY_OUT_MS` / `FTP_SAFETY_IN_MS`).
+- The daemon uses about 5.6% of one core while streaming; a profile shows ~84% of that is the kernel
+  handling each isochronous enqueue, so larger transfers are the only remaining lever.
 - When a stream starts, a few packets can be rejected as "too new" (about 3 ms of
   audio lost once).
 - DTS/AC3 pass-through (interface 3, alt 7) is not supported.
