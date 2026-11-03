@@ -66,6 +66,7 @@ typedef struct {
 
     ftp_dll dll;
     bool dll_init;
+    int trace_left;
     double ticks_per_ms;
     ftp_stats stats;
 }
@@ -198,6 +199,11 @@ static void render_slot(FTPEngine *e, out_slot *s)
 }
 
 // Frame scheduling: contiguous per stream; if we fell behind, skip ahead.
+static const char *stream_name(int stream) { return stream == 0 ? "OUT12" : stream == 1 ? "OUT34" : "IN"; }
+
+// FTP_TRACE=1: log scheduling details of the first transfers of each stream start
+static int trace_budget(FTPEngine *e) { static int on = -1; if (on < 0) on = getenv("FTP_TRACE") != NULL; return on && e->trace_left > 0 ? e->trace_left-- : 0; }
+
 static uint64_t take_frame(FTPEngine *e, int stream)
 {
     uint64_t f = e->next_frame[stream];
@@ -224,6 +230,12 @@ static void out_done(FTPEngine *e, int si, int ep, IOReturn st, IOUSBHostIsochro
     out_slot *s = &e->slots[si];
     for (int i = 0; i < e->cfg.pkts; i++)
         if (tl[i].status != kIOReturnSuccess) { e->stats.out_pkt_errors++; e->stats.out_last_pkt_status = tl[i].status; }
+    if (trace_budget(e)) {
+        char pk[160] = ""; size_t o = 0;
+        for (int i = 0; i < e->cfg.pkts && o < sizeof pk - 12; i++) o += (size_t)snprintf(pk + o, sizeof pk - o, " %x", tl[i].status & 0xfff);
+        fprintf(stderr, "trace: %s done frame %llu now %llu status %x pkts:%s\n", stream_name(ep),
+                (unsigned long long)s->x[ep].frame, (unsigned long long)[e->ifOut12 frameNumberWithTime:NULL], (unsigned)st, pk);
+    }
 
     // completion arrived too late to keep the queue full -> reschedule
     uint64_t hw = tl[e->cfg.pkts - 1].timeStamp;
@@ -258,6 +270,8 @@ static bool submit_out(FTPEngine *e, int si, int ep)
     if (!ok) {
         e->stats.submit_errors++;
         e->stats.last_submit_error = (int)err.code;
+        if (getenv("FTP_TRACE")) fprintf(stderr, "trace: OUT%d submit frame %llu now %llu -> %x\n", ep, (unsigned long long)x->frame,
+                                         (unsigned long long)[e->ifOut12 frameNumberWithTime:NULL], (unsigned)err.code);
         if (err.code == kIOReturnIsoTooOld || err.code == kIOReturnIsoTooNew) {
             resync_frames(e);
             x->frame = take_frame(e, ep);
@@ -308,6 +322,8 @@ static bool submit_in(FTPEngine *e, int si)
     if (!ok) {
         e->stats.submit_errors++;
         e->stats.last_submit_error = (int)err.code;
+        if (getenv("FTP_TRACE")) fprintf(stderr, "trace: IN submit frame %llu now %llu -> %x\n", (unsigned long long)x->frame,
+                                         (unsigned long long)[e->ifOut12 frameNumberWithTime:NULL], (unsigned)err.code);
         if (err.code == kIOReturnIsoTooOld || err.code == kIOReturnIsoTooNew) {
             resync_frames(e);
             x->frame = take_frame(e, 2);
@@ -500,14 +516,16 @@ int ftp_start(ftp_dev *d, const ftp_stream_config *cfg)
         if ((env = getenv("FTP_XFERS")) && atoi(env) > 1 && atoi(env) <= MAX_XFERS) e->cfg.xfers = atoi(env);
         if ((env = getenv("FTP_PKTS")) && atoi(env) > 0 && atoi(env) <= MAX_PKTS) e->cfg.pkts = atoi(env);
 
-        // Full-speed USB has ~1150 bytes/frame for periodic traffic: alt 3 (584 B)
-        // only fits two streams, so 88.2/96 kHz is 2-in/2-out; 44.1/48 kHz uses
-        // alt 2 (296 B) for all 4 outputs + input.
+        // Full-speed USB reserves at most ~1350 bytes/frame for periodic traffic,
+        // and bit-stuffing overhead is counted on top of wMaxPacketSize. At
+        // 44.1/48 kHz alt 2 (296 B) carries all 4 outputs + input. At 88.2/96 kHz
+        // alt 3 (584 B) fits only ONE stream: macOS refuses the second endpoint
+        // (kIOReturnNotFound), so high rates are output 1/2 only.
         bool high = e->cfg.rate > 48000;
         e->alt = high ? FTP_ALT_24BIT_96K : FTP_ALT_24BIT_48K;
         e->max_packet = high ? FTP_MAX_PACKET : FTP_MAX_PACKET_48K;
         e->n_out = (high || e->cfg.no_out34) ? 1 : 2;
-        e->use_in = !e->cfg.no_input;
+        e->use_in = !e->cfg.no_input && !high;
         IOUSBHostInterface *inIf = e->cfg.input_iface == FTP_IF_IN_DIGITAL ? e->ifInD : e->ifInA;
         IOUSBHostInterface *otherIn = inIf == e->ifInA ? e->ifInD : e->ifInA;
         uint8_t inEp = inIf == e->ifInA ? FTP_EP_IN_ANALOG : FTP_EP_IN_DIGITAL;
@@ -556,7 +574,11 @@ int ftp_start(ftp_dev *d, const ftp_stream_config *cfg)
         // Prime: all streams start on the same frame, a few ms in the future.
         __block int submitted = 0;
         dispatch_sync(e->q, ^{
-            uint64_t f0 = [e->ifOut12 frameNumberWithTime:NULL] + 4;
+            // The first enqueue on a fresh pipe takes several ms; starting only
+            // 4 frames ahead made the first packets kIOReturnIsoTooOld.
+            uint64_t f0 = [e->ifOut12 frameNumberWithTime:NULL] + 12;
+            e->trace_left = 24;
+            if (getenv("FTP_TRACE")) fprintf(stderr, "trace: prime at frame %llu (now %llu)\n", (unsigned long long)f0, (unsigned long long)(f0 - 12));
             for (int i = 0; i < 3; i++) e->next_frame[i] = f0;
             for (int i = 0; i < e->cfg.xfers; i++) {
                 render_slot(e, &e->slots[i]);

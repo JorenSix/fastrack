@@ -39,6 +39,7 @@ static uint64_t           g_out_underruns, g_out_missing_frames;
 static int64_t            g_margin_min = INT64_MAX;
 static double             g_jitter_max_ms;
 static double             g_ms_per_tick;
+static int                g_xrun_logs;  // reasons logged since the last stream start
 
 // USB-thread-only state for input alignment
 static int64_t            g_in_offset;
@@ -92,9 +93,10 @@ static void on_capture(void *ctx, uint64_t pos, const float *buf, uint32_t frame
     // the newest captured frame lines up with "now" on the clock line.
     int64_t newest = (int64_t)(pos + frames) + g_in_offset;
     int64_t target = (int64_t)g_last_out_pos;
-    int64_t tol = (int64_t)atomic_load(&s->rate) * 8 / 1000; // 8 ms
+    // in/out completion order can swing the alignment by a whole transfer
+    int64_t tol = (int64_t)atomic_load(&s->output_queue_frames) + (int64_t)atomic_load(&s->rate) * 2 / 1000;
     if (!g_in_aligned || newest - target > tol || target - newest > tol) {
-        if (g_in_aligned) { atomic_fetch_add(&s->xruns, 1); if (g_verbose) LOGF("input re-aligned by %lld frames", (long long)(target - newest)); }
+        if (g_in_aligned) { atomic_fetch_add(&s->xruns, 1); if (g_xrun_logs < 5) { g_xrun_logs++; LOGF("xrun: input re-aligned by %lld frames", (long long)(target - newest)); } }
         g_in_offset = target - (int64_t)(pos + frames);
         g_in_aligned = true;
     }
@@ -162,7 +164,7 @@ static void on_gone(void *ctx)
 static void on_xrun(void *ctx, const char *what)
 {
     atomic_fetch_add(&g_shm->xruns, 1);
-    if (g_verbose) LOGF("xrun: %s", what);
+    if (g_verbose || g_xrun_logs < 5) { g_xrun_logs++; LOGF("xrun: %s", what); }
 }
 
 /* ------------------------------------------------------------ device mgmt */
@@ -189,6 +191,7 @@ static int stream_start(void)
     atomic_store(&s->out_written_end, 0);
     g_in_aligned = false;
     g_last_out_pos = 0;
+    g_xrun_logs = 0;
     atomic_store(&s->rate, g_rate);
     atomic_store(&s->out_pairs, g_rate > 48000 ? 1 : 2);
     ftp_stream_config cfg = { .rate = g_rate, .input_iface = g_input };

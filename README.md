@@ -17,7 +17,7 @@ This project brings the same to macOS.
 | Bit depth | 16-bit | **24-bit** |
 | Sample rates | 44.1 kHz (playback) | **44.1 / 48 / 88.2 / 96 kHz** |
 | Outputs | 4 | **4** (2 at 88.2/96 kHz) |
-| Inputs | analog | **analog or S/PDIF** (selectable) |
+| Inputs | analog | **analog or S/PDIF** (selectable; 44.1/48 kHz) |
 | Volume / mute | none (no hardware controls) | **yes** (software, works with volume keys) |
 | MIDI | yes | yes |
 
@@ -27,8 +27,9 @@ Measured on an Apple Silicon Mac, macOS 15, 48 kHz playback:
 - **CPU:** about 5.6% of one core.
 - **Output latency:** about 17 ms.
 
-At 88.2/96 kHz only outputs 1/2 work, because the USB bus has no bandwidth
-for more (this matches the hardware spec).
+At 88.2/96 kHz the full-speed USB bus has room for only one 24-bit stream. In
+that mode the device is **playback only, on outputs 1/2**, and recording needs
+44.1/48 kHz.
 
 ## Install
 
@@ -65,9 +66,9 @@ quirks as the Linux kernel (`sound/usb/quirks.c`).
 
 - [x] Playback, 24-bit, volume/mute
 - [ ] Recording through Core Audio
-- [ ] 88.2/96 kHz
+- [x] 88.2/96 kHz playback
+- [x] Clean stream start (no lost packets)
 - [ ] MIDI
-- [ ] About 3 ms of audio is lost once when a stream starts
 
 ## Development
 
